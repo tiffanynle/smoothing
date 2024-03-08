@@ -8,7 +8,7 @@ import pandas as pd
 import seaborn as sns
 import math
 
-sns.set()
+sns.set_theme()
 
 
 class Accuracy(object):
