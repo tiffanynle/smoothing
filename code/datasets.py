@@ -1,8 +1,9 @@
-from torchvision import transforms, datasets
-from typing import *
-import torch
 import os
+from typing import *
+
+import torch
 from torch.utils.data import Dataset
+from torchvision import datasets, transforms
 
 # set this environment variable to the location of your imagenet directory if you want to read ImageNet data.
 # make sure your val directory is preprocessed to look like the train directory, e.g. by running this script
@@ -12,15 +13,16 @@ IMAGENET_LOC_ENV = "IMAGENET_DIR"
 # list of all datasets
 DATASETS = ["imagenet", "cifar10"]
 
+# list of all embeddings
+EMBEDDINGS = ["dinov2"]
 
-def get_dataset(
-    dataset: str, split: str, embed: bool = False, embedding: str = None
-) -> Dataset:
+
+def get_dataset(dataset: str, split: str, embedding: str = None) -> Dataset:
     """Return the dataset as a PyTorch Dataset object"""
     if dataset == "imagenet":
-        return _imagenet(split)
+        return _imagenet(split, embedding)
     elif dataset == "cifar10":
-        return _cifar10(split, embed, embedding)
+        return _cifar10(split, embedding)
 
 
 def get_num_classes(dataset: str):
@@ -31,101 +33,103 @@ def get_num_classes(dataset: str):
         return 10
 
 
-def get_normalize_layer(dataset: str) -> torch.nn.Module:
+def get_normalize_layer(dataset: str, embedding: str = None) -> torch.nn.Module:
     """Return the dataset's normalization layer"""
-    if dataset == "imagenet":
-        return NormalizeLayer(_IMAGENET_MEAN, _IMAGENET_STDDEV)
+    if embedding is not None:
+        return NormalizeLayer(_EMBEDDING_MEAN[embedding], _EMBEDDING_STDDEV[embedding])
+    elif dataset == "imagenet":
+        return NormalizeLayer(_DATASET_MEAN[dataset], _DATASET_STTDEV[dataset])
     elif dataset == "cifar10":
-        return NormalizeLayer(_CIFAR10_MEAN, _CIFAR10_STDDEV)
+        return NormalizeLayer(_DATASET_MEAN[dataset], _DATASET_STTDEV[dataset])
 
 
-_IMAGENET_MEAN = [0.485, 0.456, 0.406]
-_IMAGENET_STDDEV = [0.229, 0.224, 0.225]
+_DATASET_MEAN = {
+    "cifar10": [0.4914, 0.4822, 0.4465],
+    "imagenet": [0.485, 0.456, 0.406],
+}
 
-_CIFAR10_MEAN = [0.4914, 0.4822, 0.4465]
-_CIFAR10_STDDEV = [0.2023, 0.1994, 0.2010]
+_DATASET_STTDEV = {
+    "cifar10": [0.2023, 0.1994, 0.2010],
+    "imagenet": [0.229, 0.224, 0.225],
+}
 
-_EMBEDDING_MEANS = {"dinov2_vits14": [0.485, 0.456, 0.406]}
-_EMBEDDING_STDDEVS = {"dinov2_vits14": [0.229, 0.224, 0.225]}
+_EMBEDDING_MEAN = {
+    "dinov2_vits14": [0.485, 0.456, 0.406],
+}
+
+_EMBEDDING_STDDEV = {
+    "dinov2_vits14": [0.229, 0.224, 0.225],
+}
+
+_DATASET_TRANSFORM = {
+    ("cifar10", "train"): [
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+    ],
+    ("cifar10", "test"): [transforms.ToTensor()],
+    ("imagenet", "train"): [
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+    ],
+    ("imagenet", "test"): [
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+    ],
+    # transforms specifically so inputs can be fed into the pre-trained models to generate embeddings
+    ("dinov2_vits14", "train"): [
+        transforms.RandomResizedCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+    ],
+    ("dinov2_vits14", "test"): [
+        transforms.Resize(256),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+    ],
+}
 
 
-def _cifar10(split: str, embed: bool, embedding: str) -> Dataset:
+def _cifar10(split: str, embedding: str = None) -> Dataset:
+    transforms_list = []
+    if embedding is not None:
+        transforms_list += _DATASET_TRANSFORM[embedding, split]
+    else:
+        transforms_list + +_DATASET_TRANSFORM["cifar10", split]
     if split == "train":
-        if embed:
-            return datasets.CIFAR10(
-                "./dataset_cache",
-                train=True,
-                download=True,
-                transform=transforms.Compose(
-                    [
-                        transforms.RandomResizedCrop(224),
-                        transforms.RandomHorizontalFlip(),
-                        transforms.ToTensor(),
-                        transforms.Normalize(
-                            mean=_EMBEDDING_MEANS[embedding],
-                            std=_EMBEDDING_STDDEVS[embedding],
-                        ),
-                    ]
-                ),
-            )
-        else:
-            return datasets.CIFAR10(
-                "./dataset_cache",
-                train=True,
-                download=True,
-                transform=transforms.Compose(
-                    [
-                        transforms.RandomCrop(32, padding=4),
-                        transforms.RandomHorizontalFlip(),
-                        transforms.ToTensor(),
-                    ]
-                ),
-            )
+        return datasets.CIFAR10(
+            "./dataset_cache",
+            train=True,
+            download=True,
+            transform=transforms.Compose(transforms_list),
+        )
     elif split == "test":
-        if embed:
-            return datasets.CIFAR10(
-                "./dataset_cache",
-                train=False,
-                download=True,
-                transform=transforms.Compose(
-                    [
-                        transforms.Resize(224),
-                        transforms.ToTensor(),
-                        transforms.Normalize(
-                            mean=_EMBEDDING_MEANS[embedding],
-                            std=_EMBEDDING_STDDEVS[embedding],
-                        ),
-                    ]
-                ),
-            )
-        else:
-            return datasets.CIFAR10(
-                "./dataset_cache",
-                train=False,
-                download=True,
-                transform=transforms.ToTensor(),
-            )
+        return datasets.CIFAR10(
+            "./dataset_cache",
+            train=False,
+            download=True,
+            transform=transforms.Compose(transforms_list),
+        )
 
 
-def _imagenet(split: str) -> Dataset:
-    if not IMAGENET_LOC_ENV in os.environ["IMAGENET_LOC_ENV"]:
+def _imagenet(split: str, embedding: str = None) -> Dataset:
+    if not IMAGENET_LOC_ENV in os.environ[IMAGENET_LOC_ENV]:
         raise RuntimeError("environment variable for ImageNet directory not set")
 
     dir = os.environ[IMAGENET_LOC_ENV]
+    transforms_list = []
+    if embedding is not None:
+        transforms_list += _DATASET_TRANSFORM[embedding, split]
+    else:
+        transforms_list += _DATASET_TRANSFORM["imagenet", split]
     if split == "train":
         subdir = os.path.join(dir, "train")
-        transform = transforms.Compose(
-            [
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-            ]
-        )
     elif split == "test":
         subdir = os.path.join(dir, "val")
-        transform = transforms.Compose(
-            [transforms.Resize(256), transforms.CenterCrop(224), transforms.ToTensor()]
-        )
+
+    transform = transforms.Compose(transforms_list)
     return datasets.ImageFolder(subdir, transform)
 
 

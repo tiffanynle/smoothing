@@ -33,18 +33,18 @@ def get_architecture(arch: str, dataset: str) -> torch.nn.Module:
     return torch.nn.Sequential(normalize_layer, model)
 
 
-EMBEDDINGS = ["dinov2_vits14"]
+BACKBONES = ["dinov2_vits14"]
 _EMBED_DIMS = {"dinov2_vits14": 384}
-HEADS = ["Linear"]
+HEADS = ["linear"]
 
 
-def _load_model(arch: str):
+def _load_backbone(arch: str):
     if arch == "dinov2_vits14":
         return torch.hub.load("facebookresearch/dinov2", "dinov2_vits14")
 
 
-def get_foundation_model(arch: str, num_classes: int = None, head: str = None):
-    model = _load_model(arch)
-    if head == "Linear":
+def get_backbone(arch: str, num_classes: int = None, head: str = None):
+    model = _load_backbone(arch)
+    if head == "linear":
         model = LinearHead(model, num_classes=num_classes, embed_dim=_EMBED_DIMS[arch])
     return model
