@@ -2,13 +2,14 @@ import argparse
 import os
 
 import torch
-from datasets import DATASETS, get_dataset
-from architectures import EMBEDDINGS, get_foundation_model
+from datasets import DATASETS, EMBEDDINGS, get_dataset
+from architectures import BACKBONES, get_backbone
 from torch.utils.data import DataLoader
 
 parser = argparse.ArgumentParser(description="generate embeddings over a dataset")
 parser.add_argument("dataset", type=str, choices=DATASETS)
 parser.add_argument("embedding", type=str, choices=EMBEDDINGS)
+parser.add_argument("backbone", type=str, choices=BACKBONES)
 parser.add_argument("outdir", type=str, help="folder to save embeddings")
 parser.add_argument(
     "--workers",
@@ -77,12 +78,8 @@ def main():
     if not os.path.exists(args.outdir):
         os.makedirs(args.outdir, exist_ok=True)
 
-    train_dataset = get_dataset(
-        args.dataset, "train", embed=True, embedding=args.embedding
-    )
-    test_dataset = get_dataset(
-        args.dataset, "test", embed=True, embedding=args.embedding
-    )
+    train_dataset = get_dataset(args.dataset, "train", embedding=args.embedding)
+    test_dataset = get_dataset(args.dataset, "test", embedding=args.embedding)
     pin_memory = args.dataset == "imagenet"
     train_loader = DataLoader(
         train_dataset,
@@ -99,7 +96,7 @@ def main():
         pin_memory=pin_memory,
     )
 
-    model = get_foundation_model(arch=args.embedding).cuda()
+    model = get_backbone(arch=args.backbone).cuda()
 
     train_embeds = generate_embeddings(model, train_loader, args.dataset, "train")
     test_embeds = generate_embeddings(model, test_loader, args.dataset, "test")

@@ -54,11 +54,11 @@ _DATASET_STTDEV = {
 }
 
 _EMBEDDING_MEAN = {
-    "dinov2_vits14": [0.485, 0.456, 0.406],
+    "dinov2": [0.485, 0.456, 0.406],
 }
 
 _EMBEDDING_STDDEV = {
-    "dinov2_vits14": [0.229, 0.224, 0.225],
+    "dinov2": [0.229, 0.224, 0.225],
 }
 
 _DATASET_TRANSFORM = {
@@ -79,12 +79,13 @@ _DATASET_TRANSFORM = {
         transforms.ToTensor(),
     ],
     # transforms specifically so inputs can be fed into the pre-trained models to generate embeddings
-    ("dinov2_vits14", "train"): [
+    ("dinov2", "train"): [
+        transforms.Resize(256),
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
     ],
-    ("dinov2_vits14", "test"): [
+    ("dinov2", "test"): [
         transforms.Resize(256),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
@@ -97,7 +98,7 @@ def _cifar10(split: str, embedding: str = None) -> Dataset:
     if embedding is not None:
         transforms_list += _DATASET_TRANSFORM[embedding, split]
     else:
-        transforms_list + +_DATASET_TRANSFORM["cifar10", split]
+        transforms_list += _DATASET_TRANSFORM["cifar10", split]
     if split == "train":
         return datasets.CIFAR10(
             "./dataset_cache",
