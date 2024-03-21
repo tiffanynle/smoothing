@@ -3,6 +3,7 @@
 models
 hub
 embeddings
+wandb
 .DS_Store
 dataset_cache
 __pycache__/
