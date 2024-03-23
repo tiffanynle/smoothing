@@ -119,17 +119,6 @@ def main():
     if args.head == "linear":
         head = get_head(args.head, args.backbone, args.dataset)
 
-    wandb.init(
-        project=args.project,
-        entity=args.entity,
-        name=f"train: {args.backbone} {args.head} noise {args.noise_sd}",
-        config=vars(args),
-    )
-    logfilename = os.path.join(args.outdir, "log.txt")
-    init_logfile(
-        logfilename, "epoch\ttime\tlr\ttrain loss\ttrain acc\ttestloss\ttest acc"
-    )
-
     criterion = CrossEntropyLoss().cuda()
     optimizer = SGD(
         head.parameters(),
@@ -140,13 +129,34 @@ def main():
 
     scheduler = StepLR(optimizer, step_size=args.lr_step_size, gamma=args.gamma)
 
+    logfilename = os.path.join(args.outdir, "log.txt")
+    init_logfile(
+        logfilename, "epoch\ttime\tlr\ttrain loss\ttrain acc\ttestloss\ttest acc"
+    )
+
+    wandb.init(
+        project=args.project,
+        entity=args.entity,
+        name=f"train: {args.backbone} {args.head} noise {args.noise_sd}",
+        config=vars(args),
+    )
+
     for epoch in range(args.epochs):
         before = time.time()
         train_loss, train_acc = train(
-            train_loader, model, head, criterion, optimizer, epoch, args.noise_sd
+            train_loader,
+            model,
+            head,
+            criterion,
+            optimizer,
+            epoch,
+            args.noise_sd,
+            args.augment_embeddings,
         )
         scheduler.step()
-        test_loss, test_acc = test(test_loader, model, head, criterion, args.noise_sd)
+        test_loss, test_acc = test(
+            test_loader, model, head, criterion, args.noise_sd, args.augment_embeddings
+        )
         after = time.time()
 
         log(

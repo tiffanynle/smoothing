@@ -27,6 +27,11 @@ parser.add_argument(
 parser.add_argument("--N0", type=int, default=100)
 parser.add_argument("--N", type=int, default=100000, help="number of samples to use")
 parser.add_argument("--alpha", type=float, default=0.001, help="failure probability")
+parser.add_argument(
+    "--augment-embeddings",
+    action="store_true",
+    help="whether to augment the embeddings instead of the original input (default: False)",
+)
 args = parser.parse_args()
 
 if __name__ == "__main__":
@@ -38,7 +43,10 @@ if __name__ == "__main__":
     head = get_head(checkpoint["head"], checkpoint["backbone"], args.dataset)
     head.load_state_dict(checkpoint["state_dict"])
 
-    base_classifier = torch.nn.Sequential(backbone, head)
+    if args.augment_embeddings:
+        base_classifier = head
+    else:
+        base_classifier = torch.nn.Sequential(backbone, head)
 
     # create the smooothed classifier g
     smoothed_classifier = Smooth(
@@ -50,7 +58,7 @@ if __name__ == "__main__":
     print("idx\tlabel\tpredict\tradius\tcorrect\ttime", file=f, flush=True)
 
     # iterate through the dataset
-    dataset = get_dataset(args.dataset, args.split, args.embedding)
+    dataset = get_dataset(args.dataset, args.split, checkpoint["embedding"])
     for i in range(len(dataset)):
 
         # only certify every args.skip examples, and stop after args.max examples
@@ -64,9 +72,17 @@ if __name__ == "__main__":
         before_time = time()
         # certify the prediction of g around x
         x = x.cuda()
-        prediction, radius = smoothed_classifier.certify(
-            x, args.N0, args.N, args.alpha, args.batch
-        )
+        if args.augment_embeddings:
+            # reshape x to be of shape [batch size = 1, channels, height, width]
+            x = x.unsqueeze(0)
+            embedding = backbone(x)
+            prediction, radius = smoothed_classifier.certify(
+                embedding, args.N0, args.N, args.alpha, args.batch
+            )
+        else:
+            prediction, radius = smoothed_classifier.certify(
+                x, args.N0, args.N, args.alpha, args.batch
+            )
         after_time = time()
         correct = int(prediction == label)
 

@@ -76,7 +76,7 @@ class Smooth(object):
     def _sample_noise(self, x: torch.tensor, num: int, batch_size) -> np.ndarray:
         """ Sample the base classifier's prediction under noisy corruptions of the input x.
 
-        :param x: the input [channel x width x height]
+        :param x: the input - [channel x width x height] for images, [1, embedding dim] for embeddings
         :param num: number of samples to collect
         :param batch_size:
         :return: an ndarray[int] of length num_classes containing the per-class counts
@@ -87,7 +87,12 @@ class Smooth(object):
                 this_batch_size = min(batch_size, num)
                 num -= this_batch_size
 
-                batch = x.repeat((this_batch_size, 1, 1, 1))
+                # if we're working with images
+                if x.ndim == 4:
+                    batch = x.repeat((this_batch_size, 1, 1, 1))
+                # if we're working with embeddings
+                elif x.ndim == 2:
+                    batch = x.repeat((this_batch_size, 1))
                 noise = torch.randn_like(batch, device='cuda') * self.sigma
                 predictions = self.base_classifier(batch + noise).argmax(1)
                 counts += self._count_arr(predictions.cpu().numpy(), self.num_classes)
