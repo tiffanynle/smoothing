@@ -4,6 +4,7 @@ models
 hub
 embeddings
 wandb
+std*/
 .DS_Store
 dataset_cache
 __pycache__/
