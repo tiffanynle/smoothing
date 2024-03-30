@@ -5,3 +5,6 @@ models
 dataset_cache
 __pycache__/
 *.sh
+wandb/
+std*/
+hub/
