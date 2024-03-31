@@ -3,6 +3,7 @@ import argparse
 import os
 import setGPU
 from datasets import get_dataset, DATASETS, get_num_classes
+from squeeze import SQUEEZERS, BitSqueeze
 from core import Smooth
 from time import time
 import torch
@@ -12,6 +13,8 @@ from architectures import get_architecture
 parser = argparse.ArgumentParser(description='Certify many examples')
 parser.add_argument("dataset", choices=DATASETS, help="which dataset")
 parser.add_argument("base_classifier", type=str, help="path to saved pytorch model of base classifier")
+parser.add_argument("squeezer", type=str, default="BitSqueeze", choices=SQUEEZERS)
+parser.add_argument("bits", type=int, help="bits for feature squeezing")
 parser.add_argument("sigma", type=float, help="noise hyperparameter")
 parser.add_argument("outfile", type=str, help="output file")
 parser.add_argument("--batch", type=int, default=1000, help="batch size")
@@ -29,8 +32,11 @@ if __name__ == "__main__":
     base_classifier = get_architecture(checkpoint["arch"], args.dataset)
     base_classifier.load_state_dict(checkpoint['state_dict'])
 
+    if args.squeezer == "BitSqueeze":
+        squeezer = BitSqueeze(args.bits)
+
     # create the smooothed classifier g
-    smoothed_classifier = Smooth(base_classifier, get_num_classes(args.dataset), args.sigma)
+    smoothed_classifier = Smooth(base_classifier, get_num_classes(args.dataset), args.sigma, squeezer)
 
     # prepare output file
     f = open(args.outfile, 'w')

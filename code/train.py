@@ -3,91 +3,196 @@
 # written by Wei Yang.
 
 import argparse
+import datetime
 import os
+import time
+
+import squeeze
 import torch
-from torch.nn import CrossEntropyLoss
-from torch.utils.data import DataLoader
-from datasets import get_dataset, DATASETS
 from architectures import ARCHITECTURES, get_architecture
+from datasets import DATASETS, get_dataset
+from squeeze import SQUEEZERS, BitSqueeze
+from torch.nn import CrossEntropyLoss
 from torch.optim import SGD, Optimizer
 from torch.optim.lr_scheduler import StepLR
-import time
-import datetime
+from torch.utils.data import DataLoader
 from train_utils import AverageMeter, accuracy, init_logfile, log
 
-parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('dataset', type=str, choices=DATASETS)
-parser.add_argument('arch', type=str, choices=ARCHITECTURES)
-parser.add_argument('outdir', type=str, help='folder to save model and training log)')
-parser.add_argument('--workers', default=4, type=int, metavar='N',
-                    help='number of data loading workers (default: 4)')
-parser.add_argument('--epochs', default=90, type=int, metavar='N',
-                    help='number of total epochs to run')
-parser.add_argument('--batch', default=256, type=int, metavar='N',
-                    help='batchsize (default: 256)')
-parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
-                    help='initial learning rate', dest='lr')
-parser.add_argument('--lr_step_size', type=int, default=30,
-                    help='How often to decrease learning by gamma.')
-parser.add_argument('--gamma', type=float, default=0.1,
-                    help='LR is multiplied by gamma on schedule.')
-parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
-                    help='momentum')
-parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
-                    metavar='W', help='weight decay (default: 1e-4)')
-parser.add_argument('--noise_sd', default=0.0, type=float,
-                    help="standard deviation of Gaussian noise for data augmentation")
-parser.add_argument('--gpu', default=None, type=str,
-                    help='id(s) for CUDA_VISIBLE_DEVICES')
-parser.add_argument('--print-freq', default=10, type=int,
-                    metavar='N', help='print frequency (default: 10)')
+import wandb
+
+parser = argparse.ArgumentParser(description="PyTorch ImageNet Training")
+parser.add_argument("dataset", type=str, choices=DATASETS)
+parser.add_argument("arch", type=str, choices=ARCHITECTURES)
+parser.add_argument("squeezer", type=str, default="BitSqueeze", choices=SQUEEZERS)
+parser.add_argument(
+    "bits", type=int, help="number of bits for bit squeezing"
+)
+parser.add_argument("outdir", type=str, help="folder to save model and training log)")
+parser.add_argument(
+    "--workers",
+    default=4,
+    type=int,
+    metavar="N",
+    help="number of data loading workers (default: 4)",
+)
+parser.add_argument(
+    "--epochs", default=90, type=int, metavar="N", help="number of total epochs to run"
+)
+parser.add_argument(
+    "--batch", default=256, type=int, metavar="N", help="batchsize (default: 256)"
+)
+parser.add_argument(
+    "--lr",
+    "--learning-rate",
+    default=0.1,
+    type=float,
+    help="initial learning rate",
+    dest="lr",
+)
+parser.add_argument(
+    "--lr_step_size",
+    type=int,
+    default=30,
+    help="How often to decrease learning by gamma.",
+)
+parser.add_argument(
+    "--gamma", type=float, default=0.1, help="LR is multiplied by gamma on schedule."
+)
+parser.add_argument("--momentum", default=0.9, type=float, metavar="M", help="momentum")
+parser.add_argument(
+    "--weight-decay",
+    "--wd",
+    default=1e-4,
+    type=float,
+    metavar="W",
+    help="weight decay (default: 1e-4)",
+)
+parser.add_argument(
+    "--noise_sd",
+    default=0.0,
+    type=float,
+    help="standard deviation of Gaussian noise for data augmentation",
+)
+parser.add_argument(
+    "--gpu", default=None, type=str, help="id(s) for CUDA_VISIBLE_DEVICES"
+)
+parser.add_argument(
+    "--print-freq",
+    default=10,
+    type=int,
+    metavar="N",
+    help="print frequency (default: 10)",
+)
+parser.add_argument("--project", type=str, help="project name for WandB")
+parser.add_argument("--entity", type=str, help="entity name for WandB")
 args = parser.parse_args()
 
 
 def main():
     if args.gpu:
-        os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 
     if not os.path.exists(args.outdir):
         os.mkdir(args.outdir)
 
-    train_dataset = get_dataset(args.dataset, 'train')
-    test_dataset = get_dataset(args.dataset, 'test')
-    pin_memory = (args.dataset == "imagenet")
-    train_loader = DataLoader(train_dataset, shuffle=True, batch_size=args.batch,
-                              num_workers=args.workers, pin_memory=pin_memory)
-    test_loader = DataLoader(test_dataset, shuffle=False, batch_size=args.batch,
-                             num_workers=args.workers, pin_memory=pin_memory)
+    train_dataset = get_dataset(args.dataset, "train")
+    test_dataset = get_dataset(args.dataset, "test")
+    pin_memory = args.dataset == "imagenet"
+    train_loader = DataLoader(
+        train_dataset,
+        shuffle=True,
+        batch_size=args.batch,
+        num_workers=args.workers,
+        pin_memory=pin_memory,
+    )
+    test_loader = DataLoader(
+        test_dataset,
+        shuffle=False,
+        batch_size=args.batch,
+        num_workers=args.workers,
+        pin_memory=pin_memory,
+    )
 
     model = get_architecture(args.arch, args.dataset)
 
-    logfilename = os.path.join(args.outdir, 'log.txt')
-    init_logfile(logfilename, "epoch\ttime\tlr\ttrain loss\ttrain acc\ttestloss\ttest acc")
-
     criterion = CrossEntropyLoss().cuda()
-    optimizer = SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    optimizer = SGD(
+        model.parameters(),
+        lr=args.lr,
+        momentum=args.momentum,
+        weight_decay=args.weight_decay,
+    )
     scheduler = StepLR(optimizer, step_size=args.lr_step_size, gamma=args.gamma)
+
+    if args.squeezer == "BitSqueeze":
+        squeezer = BitSqueeze(bits=args.bits)
+
+    logfilename = os.path.join(args.outdir, "log.txt")
+    init_logfile(
+        logfilename, "epoch\ttime\tlr\ttrain loss\ttrain acc\ttestloss\ttest acc"
+    )
+
+    wandb.init(
+        project=args.project,
+        entity=args.entity,
+        name=f"train: {args.squeezer} noise {args.noise_sd}",
+        config=vars(args),
+    )
 
     for epoch in range(args.epochs):
         before = time.time()
-        train_loss, train_acc = train(train_loader, model, criterion, optimizer, epoch, args.noise_sd)
+        train_loss, train_acc = train(
+            train_loader, model, criterion, optimizer, epoch, args.noise_sd, squeezer
+        )
         scheduler.step()
-        test_loss, test_acc = test(test_loader, model, criterion, args.noise_sd)
+        test_loss, test_acc = test(
+            test_loader, model, criterion, args.noise_sd, squeezer
+        )
         after = time.time()
 
-        log(logfilename, "{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}".format(
-            epoch, str(datetime.timedelta(seconds=(after - before))),
-            scheduler.get_last_lr()[0], train_loss, train_acc, test_loss, test_acc))
+        log(
+            logfilename,
+            "{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.3}".format(
+                epoch,
+                str(datetime.timedelta(seconds=(after - before))),
+                scheduler.get_last_lr()[0],
+                train_loss,
+                train_acc,
+                test_loss,
+                test_acc,
+            ),
+        )
 
-        torch.save({
-            'epoch': epoch + 1,
-            'arch': args.arch,
-            'state_dict': model.state_dict(),
-            'optimizer': optimizer.state_dict(),
-        }, os.path.join(args.outdir, 'checkpoint.pth.tar'))
+        wandb.log(
+            {
+                "lr": scheduler.get_last_lr()[0],
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "test_loss": test_loss,
+                "test_acc": test_acc,
+            }
+        )
+
+        torch.save(
+            {
+                "epoch": epoch + 1,
+                "arch": args.arch,
+                "state_dict": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+            },
+            os.path.join(args.outdir, "checkpoint.pth.tar"),
+        )
 
 
-def train(loader: DataLoader, model: torch.nn.Module, criterion, optimizer: Optimizer, epoch: int, noise_sd: float):
+def train(
+    loader: DataLoader,
+    model: torch.nn.Module,
+    criterion,
+    optimizer: Optimizer,
+    epoch: int,
+    noise_sd: float,
+    squeezer: squeeze.FeatureSqueeze,
+):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -105,8 +210,11 @@ def train(loader: DataLoader, model: torch.nn.Module, criterion, optimizer: Opti
         inputs = inputs.cuda()
         targets = targets.cuda()
 
+        # squeeze inputs
+        inputs = squeezer(inputs)
+
         # augment inputs with noise
-        inputs = inputs + torch.randn_like(inputs, device='cuda') * noise_sd
+        inputs = inputs + torch.randn_like(inputs, device="cuda") * noise_sd
 
         # compute output
         outputs = model(inputs)
@@ -128,19 +236,30 @@ def train(loader: DataLoader, model: torch.nn.Module, criterion, optimizer: Opti
         end = time.time()
 
         if i % args.print_freq == 0:
-            print('Epoch: [{0}][{1}/{2}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                  'Acc@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
-                epoch, i, len(loader), batch_time=batch_time,
-                data_time=data_time, loss=losses, top1=top1, top5=top5))
+            print(
+                "Epoch: [{0}][{1}/{2}]\t"
+                "Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
+                "Data {data_time.val:.3f} ({data_time.avg:.3f})\t"
+                "Loss {loss.val:.4f} ({loss.avg:.4f})\t"
+                "Acc@1 {top1.val:.3f} ({top1.avg:.3f})\t"
+                "Acc@5 {top5.val:.3f} ({top5.avg:.3f})".format(
+                    epoch,
+                    i,
+                    len(loader),
+                    batch_time=batch_time,
+                    data_time=data_time,
+                    loss=losses,
+                    top1=top1,
+                    top5=top5,
+                )
+            )
 
     return (losses.avg, top1.avg)
 
 
-def test(loader: DataLoader, model: torch.nn.Module, criterion, noise_sd: float):
+def test(
+    loader: DataLoader, model: torch.nn.Module, criterion, noise_sd: float, squeezer
+):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -159,8 +278,11 @@ def test(loader: DataLoader, model: torch.nn.Module, criterion, noise_sd: float)
             inputs = inputs.cuda()
             targets = targets.cuda()
 
+            # squeeze inputs
+            inputs = squeezer(inputs)
+
             # augment inputs with noise
-            inputs = inputs + torch.randn_like(inputs, device='cuda') * noise_sd
+            inputs = inputs + torch.randn_like(inputs, device="cuda") * noise_sd
 
             # compute output
             outputs = model(inputs)
@@ -177,14 +299,22 @@ def test(loader: DataLoader, model: torch.nn.Module, criterion, noise_sd: float)
             end = time.time()
 
             if i % args.print_freq == 0:
-                print('Test: [{0}/{1}]\t'
-                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                      'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                      'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                      'Acc@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
-                    i, len(loader), batch_time=batch_time,
-                    data_time=data_time, loss=losses, top1=top1, top5=top5))
+                print(
+                    "Test: [{0}/{1}]\t"
+                    "Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
+                    "Data {data_time.val:.3f} ({data_time.avg:.3f})\t"
+                    "Loss {loss.val:.4f} ({loss.avg:.4f})\t"
+                    "Acc@1 {top1.val:.3f} ({top1.avg:.3f})\t"
+                    "Acc@5 {top5.val:.3f} ({top5.avg:.3f})".format(
+                        i,
+                        len(loader),
+                        batch_time=batch_time,
+                        data_time=data_time,
+                        loss=losses,
+                        top1=top1,
+                        top5=top5,
+                    )
+                )
 
         return (losses.avg, top1.avg)
 
