@@ -18,6 +18,7 @@ class Smooth(object):
         num_classes: int,
         sigma: float,
         squeezer: squeeze.FeatureSqueeze,
+        squeeze_after: bool,
     ):
         """
         :param base_classifier: maps from [batch x channel x height x width] to [batch x num_classes]
@@ -28,6 +29,7 @@ class Smooth(object):
         self.num_classes = num_classes
         self.sigma = sigma
         self.squeezer = squeezer
+        self.squeeze_after = squeeze_after
 
     def certify(
         self, x: torch.tensor, n0: int, n: int, alpha: float, batch_size: int
@@ -98,10 +100,15 @@ class Smooth(object):
                 num -= this_batch_size
 
                 batch = x.repeat((this_batch_size, 1, 1, 1))
-                # feature squeeze the batch
-                batch = self.squeezer(batch)
                 noise = torch.randn_like(batch, device="cuda") * self.sigma
-                predictions = self.base_classifier(batch + noise).argmax(1)
+
+                if not self.squeeze_after:
+                    batch = self.squeezer(batch)
+                    predictions = self.base_classifier(batch + noise).argmax(1)
+                elif self.squeeze_after:
+                    predictions = self.base_classifier(
+                        self.squeezer(batch) + noise
+                    ).argmax(1)
                 counts += self._count_arr(predictions.cpu().numpy(), self.num_classes)
             return counts
 

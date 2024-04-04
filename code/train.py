@@ -11,7 +11,7 @@ import squeeze
 import torch
 from architectures import ARCHITECTURES, get_architecture
 from datasets import DATASETS, get_dataset
-from squeeze import SQUEEZERS, BitSqueeze
+from squeeze import SQUEEZERS, BitSqueeze, GaussianBlurSqueeze
 from torch.nn import CrossEntropyLoss
 from torch.optim import SGD, Optimizer
 from torch.optim.lr_scheduler import StepLR
@@ -24,9 +24,6 @@ parser = argparse.ArgumentParser(description="PyTorch ImageNet Training")
 parser.add_argument("dataset", type=str, choices=DATASETS)
 parser.add_argument("arch", type=str, choices=ARCHITECTURES)
 parser.add_argument("squeezer", type=str, default="BitSqueeze", choices=SQUEEZERS)
-parser.add_argument(
-    "bits", type=int, help="number of bits for bit squeezing"
-)
 parser.add_argument("outdir", type=str, help="folder to save model and training log)")
 parser.add_argument(
     "--workers",
@@ -72,6 +69,17 @@ parser.add_argument(
     default=0.0,
     type=float,
     help="standard deviation of Gaussian noise for data augmentation",
+)
+parser.add_argument(
+    "--bits", type=int, default=5, help="number of bits for bit squeezing"
+)
+parser.add_argument(
+    "--kernel_size", type=int, default=3, help="kernel size for blurring"
+)
+parser.add_argument(
+    "--squeeze_after",
+    action="store_true",
+    help="whether to do feature squeezing after adding Gaussian noise",
 )
 parser.add_argument(
     "--gpu", default=None, type=str, help="id(s) for CUDA_VISIBLE_DEVICES"
@@ -125,7 +133,9 @@ def main():
     scheduler = StepLR(optimizer, step_size=args.lr_step_size, gamma=args.gamma)
 
     if args.squeezer == "BitSqueeze":
-        squeezer = BitSqueeze(bits=args.bits)
+        squeezer = BitSqueeze(args.bits)
+    elif args.squeezer == "GaussianBlurSqueeze":
+        squeezer = GaussianBlurSqueeze(args.kernel_size)
 
     logfilename = os.path.join(args.outdir, "log.txt")
     init_logfile(
@@ -142,11 +152,23 @@ def main():
     for epoch in range(args.epochs):
         before = time.time()
         train_loss, train_acc = train(
-            train_loader, model, criterion, optimizer, epoch, args.noise_sd, squeezer
+            train_loader,
+            model,
+            criterion,
+            optimizer,
+            epoch,
+            args.noise_sd,
+            squeezer,
+            args.squeeze_after,
         )
         scheduler.step()
         test_loss, test_acc = test(
-            test_loader, model, criterion, args.noise_sd, squeezer
+            test_loader,
+            model,
+            criterion,
+            args.noise_sd,
+            squeezer,
+            args.squeeze_after,
         )
         after = time.time()
 
@@ -192,6 +214,7 @@ def train(
     epoch: int,
     noise_sd: float,
     squeezer: squeeze.FeatureSqueeze,
+    squeeze_after: bool,
 ):
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -211,10 +234,14 @@ def train(
         targets = targets.cuda()
 
         # squeeze inputs
-        inputs = squeezer(inputs)
+        if not squeeze_after:
+            inputs = squeezer(inputs)
 
         # augment inputs with noise
         inputs = inputs + torch.randn_like(inputs, device="cuda") * noise_sd
+
+        if squeeze_after:
+            inputs = squeezer(inputs)
 
         # compute output
         outputs = model(inputs)
@@ -258,7 +285,12 @@ def train(
 
 
 def test(
-    loader: DataLoader, model: torch.nn.Module, criterion, noise_sd: float, squeezer
+    loader: DataLoader,
+    model: torch.nn.Module,
+    criterion,
+    noise_sd: float,
+    squeezer: squeeze.FeatureSqueeze,
+    squeeze_after: bool,
 ):
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -278,11 +310,14 @@ def test(
             inputs = inputs.cuda()
             targets = targets.cuda()
 
-            # squeeze inputs
-            inputs = squeezer(inputs)
+            if not squeeze_after:
+                inputs = squeezer(inputs)
 
             # augment inputs with noise
             inputs = inputs + torch.randn_like(inputs, device="cuda") * noise_sd
+
+            if squeeze_after:
+                inputs = squeezer(inputs)
 
             # compute output
             outputs = model(inputs)
