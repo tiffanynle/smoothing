@@ -107,7 +107,7 @@ class Smooth(object):
                     predictions = self.base_classifier(batch + noise).argmax(1)
                 elif self.squeeze_after:
                     predictions = self.base_classifier(
-                        self.squeezer(batch) + noise
+                        self.squeezer(batch + noise)
                     ).argmax(1)
                 counts += self._count_arr(predictions.cpu().numpy(), self.num_classes)
             return counts
