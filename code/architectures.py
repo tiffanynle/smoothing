@@ -71,7 +71,7 @@ def get_backbone(embedding: str, backbone: str, dataset: str) -> torch.nn.Module
     :return: a PyTorch module
     :rtype: torch.nn.Module
     """
-    model = torch.nn.DataParallel(_load_backbone(backbone)).cuda()
+    model = _load_backbone(backbone).cuda()
     normalize_layer = get_normalize_layer(dataset, embedding)
     return torch.nn.Sequential(normalize_layer, model)
 
@@ -89,6 +89,4 @@ def get_head(head: str, backbone: str, dataset: str) -> torch.nn.Module:
     :rtype: torch.nn.Module
     """
     if head == "linear":
-        return torch.nn.DataParallel(
-            LinearHead(get_num_classes(dataset), _EMBEDDING_DIMS[backbone])
-        ).cuda()
+        return LinearHead(get_num_classes(dataset), _EMBEDDING_DIMS[backbone])

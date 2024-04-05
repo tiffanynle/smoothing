@@ -43,3 +43,8 @@ def log(filename: str, text: str):
     f = open(filename, 'a')
     f.write(text+"\n")
     f.close()
+
+def minmax_normalize(
+    tensor: torch.Tensor, min: torch.Tensor, max: torch.Tensor
+) -> torch.Tensor:
+    return ((tensor - min) / (max - min)).clamp(0, 1)

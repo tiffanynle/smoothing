@@ -91,7 +91,7 @@ class Smooth(object):
                 if x.ndim == 4:
                     batch = x.repeat((this_batch_size, 1, 1, 1))
                 # if we're working with embeddings
-                elif x.ndim == 2:
+                elif x.ndim == 1:
                     batch = x.repeat((this_batch_size, 1))
                 noise = torch.randn_like(batch, device='cuda') * self.sigma
                 predictions = self.base_classifier(batch + noise).argmax(1)

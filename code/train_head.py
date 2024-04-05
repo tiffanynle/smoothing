@@ -4,21 +4,25 @@ import os
 import time
 
 import torch
-from architectures import BACKBONES, HEADS, get_backbone, get_head
-from datasets import DATASETS, EMBEDDINGS, get_dataset
+from architectures import HEADS, get_head
+from datasets import DATASETS, EMBEDDINGS
 from torch.nn import CrossEntropyLoss
 from torch.optim import SGD, Optimizer
 from torch.optim.lr_scheduler import StepLR
-from torch.utils.data import DataLoader
-from train_utils import AverageMeter, accuracy, init_logfile, log
+from torch.utils.data import DataLoader, TensorDataset
+from train_utils import AverageMeter, accuracy, init_logfile, log, minmax_normalize
 
 import wandb
 
 parser = argparse.ArgumentParser("Training for Vision Transformer Head")
 parser.add_argument("dataset", type=str, choices=DATASETS)
 parser.add_argument("embedding", type=str, choices=EMBEDDINGS)
-parser.add_argument("backbone", type=str, choices=BACKBONES)
 parser.add_argument("head", type=str, default=None, choices=HEADS)
+parser.add_argument(
+    "embeddir",
+    type=str,
+    help="folder where embeddings are stored",
+)
 parser.add_argument("outdir", type=str, help="folder to save model and training log)")
 parser.add_argument(
     "--workers",
@@ -66,11 +70,6 @@ parser.add_argument(
     help="standard deviation of Gaussian noise for data augmentation",
 )
 parser.add_argument(
-    "--augment-embeddings",
-    action="store_true",
-    help="whether to augment the generated embeddings with Gaussian noise (default: False)",
-)
-parser.add_argument(
     "--gpu", default=None, type=str, help="id(s) for CUDA_VISIBLE_DEVICES"
 )
 parser.add_argument(
@@ -92,8 +91,28 @@ def main():
     if not os.path.exists(args.outdir):
         os.makedirs(args.outdir, exist_ok=True)
 
-    train_dataset = get_dataset(args.dataset, "train", args.embedding)
-    test_dataset = get_dataset(args.dataset, "test", args.embedding)
+    # load train, test datasets
+    data_train = torch.load(f"{args.embeddir}/{args.embedding}_{args.dataset}_train.pt")
+    data_test = torch.load(f"{args.embeddir}/{args.embedding}_{args.dataset}_test.pt")
+
+    # what backbone did we use?
+    backbone = data_train["backbone"]
+
+    # scale inputs to be from [0, 1] for additive Gaussian noise to even make sense
+    train_min, _ = data_train["inputs"].min(dim=0)
+    train_max, _ = data_train["inputs"].max(dim=0)
+    inputs_train = minmax_normalize(data_train["inputs"], min=train_min, max=train_max)
+    inputs_test = minmax_normalize(data_test["inputs"], min=train_min, max=train_max)
+
+    assert inputs_train.max() <= 1, "error with normalization of train tensors"
+    assert inputs_test.max() <= 1, "error with normalization of test tensors"
+
+    labels_train = data_train["labels"]
+    labels_test = data_test["labels"]
+
+    train_dataset = TensorDataset(inputs_train, labels_train)
+    test_dataset = TensorDataset(inputs_test, labels_test)
+
     pin_memory = args.dataset == "imagenet"
     train_loader = DataLoader(
         train_dataset,
@@ -110,14 +129,8 @@ def main():
         pin_memory=pin_memory,
     )
 
-    model = get_backbone(
-        args.embedding,
-        args.backbone,
-        args.dataset,
-    )
-
     if args.head == "linear":
-        head = get_head(args.head, args.backbone, args.dataset)
+        head = get_head(args.head, backbone, args.dataset).cuda()
 
     criterion = CrossEntropyLoss().cuda()
     optimizer = SGD(
@@ -137,7 +150,7 @@ def main():
     wandb.init(
         project=args.project,
         entity=args.entity,
-        name=f"train: {args.backbone} {args.head} noise {args.noise_sd}",
+        name=f"train: {args.embedding} {args.head} noise {args.noise_sd}",
         config=vars(args),
     )
 
@@ -145,17 +158,18 @@ def main():
         before = time.time()
         train_loss, train_acc = train(
             train_loader,
-            model,
             head,
             criterion,
             optimizer,
             epoch,
             args.noise_sd,
-            args.augment_embeddings,
         )
         scheduler.step()
         test_loss, test_acc = test(
-            test_loader, model, head, criterion, args.noise_sd, args.augment_embeddings
+            test_loader,
+            head,
+            criterion,
+            args.noise_sd,
         )
         after = time.time()
 
@@ -185,7 +199,7 @@ def main():
             {
                 "epoch": epoch + 1,
                 "embedding": args.embedding,
-                "backbone": args.backbone,
+                "backbone": backbone,
                 "head": args.head,
                 "state_dict": head.state_dict(),
                 "optimizer": optimizer.state_dict(),
@@ -197,13 +211,11 @@ def main():
 
 def train(
     loader: DataLoader,
-    model: torch.nn.Module,
     head: torch.nn.Module,
     criterion,
     optimizer: Optimizer,
     epoch: int,
     noise_sd: float,
-    augment_embeddings: bool,
 ):
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -213,7 +225,7 @@ def train(
     end = time.time()
 
     # switch to train mode
-    model.train()
+    head.train()
 
     for i, (inputs, targets) in enumerate(loader):
         # measure data loading time
@@ -223,21 +235,10 @@ def train(
         targets = targets.cuda()
 
         # augment inputs with noise
-        if not augment_embeddings:
-            inputs = inputs + torch.randn_like(inputs, device="cuda") * noise_sd
-
-        # compute embeddings
-        with torch.no_grad():
-            embeddings = model(inputs)
-
-        # if we choose to augment the embeddings with noise instead
-        if augment_embeddings:
-            embeddings = (
-                embeddings + torch.rand_like(embeddings, device="cuda") * noise_sd
-            )
+        inputs = inputs + torch.randn_like(inputs, device="cuda") * noise_sd
 
         # compute output
-        outputs = head(embeddings)
+        outputs = head(inputs)
 
         loss = criterion(outputs, targets)
 
@@ -280,11 +281,9 @@ def train(
 
 def test(
     loader: DataLoader,
-    model: torch.nn.Module,
     head: torch.nn.Module,
     criterion,
     noise_sd: float,
-    augment_embeddings: bool,
 ):
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -294,7 +293,7 @@ def test(
     end = time.time()
 
     # switch to eval mode
-    model.eval()
+    head.eval()
 
     with torch.no_grad():
         for i, (inputs, targets) in enumerate(loader):
@@ -304,21 +303,10 @@ def test(
             inputs = inputs.cuda()
             targets = targets.cuda()
 
-            # augment inputs with noise
-            if not augment_embeddings:
-                inputs = inputs + torch.randn_like(inputs, device="cuda") * noise_sd
-
-            # compute embeddings
-            embeddings = model(inputs)
-
-            # if we choose to augment the embeddings with noise instead
-            if augment_embeddings:
-                embeddings = (
-                    embeddings + torch.rand_like(embeddings, device="cuda") * noise_sd
-                )
+            inputs = inputs + torch.randn_like(inputs, device="cuda") * noise_sd
 
             # compute output
-            outputs = head(embeddings)
+            outputs = head(inputs)
 
             loss = criterion(outputs, targets)
 

@@ -5,14 +5,21 @@ import os
 from time import time
 
 import torch
-from architectures import get_backbone, get_head
+from architectures import get_head
 from core import Smooth
+from torch.utils.data import TensorDataset
+from train_utils import minmax_normalize
 
-# import setGPU
-from datasets import DATASETS, get_dataset, get_num_classes
+import setGPU
+from datasets import DATASETS, EMBEDDINGS, get_num_classes
 
 parser = argparse.ArgumentParser(description="Certify many examples")
 parser.add_argument("dataset", choices=DATASETS, help="which dataset")
+parser.add_argument(
+    "embeddir",
+    type=str,
+    help="folder where embeddings are stored",
+)
 parser.add_argument(
     "base_classifier", type=str, help="path to saved pytorch model of base classifier"
 )
@@ -27,40 +34,40 @@ parser.add_argument(
 parser.add_argument("--N0", type=int, default=100)
 parser.add_argument("--N", type=int, default=100000, help="number of samples to use")
 parser.add_argument("--alpha", type=float, default=0.001, help="failure probability")
-parser.add_argument(
-    "--augment-embeddings",
-    action="store_true",
-    help="whether to augment the embeddings instead of the original input (default: False)",
-)
 args = parser.parse_args()
 
 if __name__ == "__main__":
     # load the base classifier
     checkpoint = torch.load(args.base_classifier)
-    backbone = get_backbone(
-        checkpoint["embedding"], checkpoint["backbone"], args.dataset
-    )
-    head = get_head(checkpoint["head"], checkpoint["backbone"], args.dataset)
+    embedding = checkpoint["embedding"]
+
+    head = get_head(checkpoint["head"], checkpoint["backbone"], args.dataset).cuda()
     head.load_state_dict(checkpoint["state_dict"])
 
-    if args.augment_embeddings:
-        base_classifier = head
-    else:
-        base_classifier = torch.nn.Sequential(backbone, head)
-
     # create the smooothed classifier g
-    smoothed_classifier = Smooth(
-        base_classifier, get_num_classes(args.dataset), args.sigma
-    )
+    smoothed_classifier = Smooth(head, get_num_classes(args.dataset), args.sigma)
 
     # prepare output file
     f = open(args.outfile, "w")
     print("idx\tlabel\tpredict\tradius\tcorrect\ttime", file=f, flush=True)
 
-    # iterate through the dataset
-    dataset = get_dataset(args.dataset, args.split, checkpoint["embedding"])
-    for i in range(len(dataset)):
+    # TODO refactor this -- why am I loading a whole dataset just to get min/max?...
+    data_train = torch.load(f"{args.embeddir}/{embedding}_{args.dataset}_train.pt")
+    train_min, _ = data_train["inputs"].min(dim=0)
+    train_max, _ = data_train["inputs"].max(dim=0)
 
+    # load tensor dataset
+    data = torch.load(
+        f"{args.embeddir}/{embedding}_{args.dataset}_{args.split}.pt"
+    )
+
+    inputs = data["inputs"]
+    inputs = minmax_normalize(inputs, min=train_min, max=train_max)
+    labels = data["labels"]
+
+    dataset = TensorDataset(inputs, labels)
+
+    for i in range(len(dataset)):
         # only certify every args.skip examples, and stop after args.max examples
         if i % args.skip != 0:
             continue
@@ -72,17 +79,9 @@ if __name__ == "__main__":
         before_time = time()
         # certify the prediction of g around x
         x = x.cuda()
-        if args.augment_embeddings:
-            # reshape x to be of shape [batch size = 1, channels, height, width]
-            x = x.unsqueeze(0)
-            embedding = backbone(x)
-            prediction, radius = smoothed_classifier.certify(
-                embedding, args.N0, args.N, args.alpha, args.batch
-            )
-        else:
-            prediction, radius = smoothed_classifier.certify(
-                x, args.N0, args.N, args.alpha, args.batch
-            )
+        prediction, radius = smoothed_classifier.certify(
+            x, args.N0, args.N, args.alpha, args.batch
+        )
         after_time = time()
         correct = int(prediction == label)
 

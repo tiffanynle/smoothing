@@ -34,6 +34,8 @@ def generate_embeddings(
     model: torch.nn.Module,
     loader: DataLoader,
     dataset: str,
+    embedding: str,
+    backbone: str,
     split: str,
 ) -> dict[torch.Tensor, torch.Tensor]:
     embeddings = []
@@ -43,16 +45,18 @@ def generate_embeddings(
             inputs = inputs.cuda()
 
             # retrieve embedding from model
-            embed = model(inputs).cpu()
+            embed = model(inputs)
 
             # store embeddings and labels
-            embeddings.append(embed)
+            embeddings.append(embed.cpu())
             labels.append(targets)
 
     return {
-        "embeddings": torch.cat(embeddings),
+        "inputs": torch.cat(embeddings),
         "labels": torch.cat(labels),
         "dataset": dataset,
+        "embedding": embedding,
+        "backbone": backbone,
         "split": split,
     }
 
@@ -96,10 +100,16 @@ def main():
         pin_memory=pin_memory,
     )
 
-    model = get_backbone(arch=args.backbone).cuda()
+    model = get_backbone(
+        embedding=args.embedding, backbone=args.backbone, dataset=args.dataset
+    ).cuda()
 
-    train_embeds = generate_embeddings(model, train_loader, args.dataset, "train")
-    test_embeds = generate_embeddings(model, test_loader, args.dataset, "test")
+    train_embeds = generate_embeddings(
+        model, train_loader, args.dataset, args.embedding, args.backbone, "train"
+    )
+    test_embeds = generate_embeddings(
+        model, test_loader, args.dataset, args.embedding, args.backbone, "test"
+    )
 
     save_embeddings(train_embeds, args.outdir, args.embedding, args.dataset, "train")
     save_embeddings(test_embeds, args.outdir, args.embedding, args.dataset, "test")
