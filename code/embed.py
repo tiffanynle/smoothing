@@ -114,6 +114,18 @@ def main():
     save_embeddings(train_embeds, args.outdir, args.embedding, args.dataset, "train")
     save_embeddings(test_embeds, args.outdir, args.embedding, args.dataset, "test")
 
+    norm_tensors = {
+        "min": train_embeds["inputs"].min(dim=0)[0],
+        "max": train_embeds["inputs"].max(dim=0)[0],
+        "mean": train_embeds["inputs"].mean(dim=0),
+        "sd": train_embeds["inputs"].std(dim=0),
+    }
+
+    torch.save(
+        norm_tensors,
+        os.path.join(args.outdir, f"{args.embedding}_{args.dataset}_norm.pt"),
+    )
+
 
 if __name__ == "__main__":
     main()
