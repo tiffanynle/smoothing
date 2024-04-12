@@ -90,10 +90,11 @@ class Smooth(object):
                 # if we're working with images
                 if x.ndim == 4:
                     batch = x.repeat((this_batch_size, 1, 1, 1))
+                    noise = torch.randn_like(batch, device='cuda') * self.sigma
                 # if we're working with embeddings
                 elif x.ndim == 1:
                     batch = x.repeat((this_batch_size, 1))
-                noise = torch.randn_like(batch, device='cuda') * self.sigma
+                    noise = torch.randn_like(batch) * self.sigma
                 predictions = self.base_classifier(batch + noise).argmax(1)
                 counts += self._count_arr(predictions.cpu().numpy(), self.num_classes)
             return counts

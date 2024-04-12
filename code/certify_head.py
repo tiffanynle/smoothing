@@ -11,7 +11,7 @@ from torch.utils.data import TensorDataset
 from train_utils import minmax_normalize
 
 import setGPU
-from datasets import DATASETS, EMBEDDINGS, get_num_classes
+from datasets import DATASETS, EMBEDDINGS, get_num_classes, NormalizeLayer
 
 parser = argparse.ArgumentParser(description="Certify many examples")
 parser.add_argument("dataset", choices=DATASETS, help="which dataset")
@@ -41,28 +41,34 @@ if __name__ == "__main__":
     checkpoint = torch.load(args.base_classifier)
     embedding = checkpoint["embedding"]
 
-    head = get_head(checkpoint["head"], checkpoint["backbone"], args.dataset).cuda()
-    head.load_state_dict(checkpoint["state_dict"])
+    head = get_head(checkpoint["head"], checkpoint["backbone"], args.dataset)
+    head = head.cuda()
+
+    # load mean, sds for standardization after noising
+    data_norm = torch.load(f"{args.embeddir}/{embedding}_{args.dataset}_norm.pt")
+    means = data_norm["mean"]
+    sds = data_norm["sd"]
+
+    # wrap model and load state dict
+    normalize_layer = NormalizeLayer(means=means, sds=sds)
+    model = torch.nn.Sequential(normalize_layer, head)
+    model.load_state_dict(checkpoint["state_dict"])
 
     # create the smooothed classifier g
-    smoothed_classifier = Smooth(head, get_num_classes(args.dataset), args.sigma)
+    smoothed_classifier = Smooth(model, get_num_classes(args.dataset), args.sigma)
 
     # prepare output file
     f = open(args.outfile, "w")
     print("idx\tlabel\tpredict\tradius\tcorrect\ttime", file=f, flush=True)
 
-    # TODO refactor this -- why am I loading a whole dataset just to get min/max?...
-    data_train = torch.load(f"{args.embeddir}/{embedding}_{args.dataset}_train.pt")
-    train_min, _ = data_train["inputs"].min(dim=0)
-    train_max, _ = data_train["inputs"].max(dim=0)
+    data_norm = torch.load(f"{args.embeddir}/{embedding}_{args.dataset}_norm.pt")
+    train_min = data_norm["min"]
+    train_max = data_norm["max"]
 
     # load tensor dataset
-    data = torch.load(
-        f"{args.embeddir}/{embedding}_{args.dataset}_{args.split}.pt"
-    )
+    data = torch.load(f"{args.embeddir}/{embedding}_{args.dataset}_{args.split}.pt")
 
-    inputs = data["inputs"]
-    inputs = minmax_normalize(inputs, min=train_min, max=train_max)
+    inputs = minmax_normalize(data["inputs"], min=train_min, max=train_max)
     labels = data["labels"]
 
     dataset = TensorDataset(inputs, labels)

@@ -149,11 +149,17 @@ class NormalizeLayer(torch.nn.Module):
         :param sds: the channel standard deviations
         """
         super(NormalizeLayer, self).__init__()
-        self.means = torch.tensor(means).cuda()
-        self.sds = torch.tensor(sds).cuda()
+        self.means = torch.tensor(means)
+        self.sds = torch.tensor(sds)
+        self.means = self.means.cuda()
+        self.sds = self.sds.cuda()
 
     def forward(self, input: torch.tensor):
-        (batch_size, num_channels, height, width) = input.shape
-        means = self.means.repeat((batch_size, height, width, 1)).permute(0, 3, 1, 2)
-        sds = self.sds.repeat((batch_size, height, width, 1)).permute(0, 3, 1, 2)
-        return (input - means) / sds
+        if input.ndim == 4:
+            (batch_size, num_channels, height, width) = input.shape
+            means = self.means.repeat((batch_size, height, width, 1)).permute(0, 3, 1, 2)
+            sds = self.sds.repeat((batch_size, height, width, 1)).permute(0, 3, 1, 2)
+            return (input - means) / sds
+        elif input.ndim == 2:
+            # should work fine to just do broadcasting here
+            return (input - self.means) / self.sds
