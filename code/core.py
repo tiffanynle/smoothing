@@ -88,7 +88,7 @@ class Smooth(object):
                 num -= this_batch_size
 
                 # if we're working with images
-                if x.ndim == 4:
+                if x.ndim == 3:
                     batch = x.repeat((this_batch_size, 1, 1, 1))
                     noise = torch.randn_like(batch, device='cuda') * self.sigma
                 # if we're working with embeddings

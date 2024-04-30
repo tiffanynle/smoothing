@@ -6,7 +6,7 @@ import time
 import torch
 from architectures import HEADS, get_head
 from datasets import DATASETS, EMBEDDINGS, NormalizeLayer
-from torch.nn import CrossEntropyLoss
+from torch.nn import CrossEntropyLoss, DataParallel
 from torch.optim import SGD, Optimizer
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader, TensorDataset
@@ -136,7 +136,7 @@ def main():
 
     if args.head == "linear":
         head = get_head(args.head, backbone, args.dataset)
-        head = head.cuda()
+        head = DataParallel(head).cuda()
 
     means = data_norm["mean"]
     sds = data_norm["sd"]
